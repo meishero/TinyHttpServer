@@ -14,21 +14,56 @@
 
 #define SIZE 1024
 
+int recv_n(int sock, char* buf, int len)
+{
+	char* cur = buf;
+	int left = len;
+	while(len>0){
+		int ret = recv(sock, cur, len, 0);
+		if( ret <= 0){
+			return -1;
+		}
+		cur += ret;
+		left -= ret;
+	}
+	return len;
+}
+int send_n(int sock, char* buf, int len)
+{
+	char* cur = buf;
+	int left = len;
+	while(len>0)
+	{
+		int ret = send(sock, buf, len, 0);
+		if( ret<= 0 ){
+			return -1;
+		}
+		cur += ret;
+		left -= ret;
+	}
+	return len;
+}
+void error_deal(const char* fun, int  line, const char* reason)
+{
+	
+	printf("error:%s,%s,%s", line, fun, reason);
+	exit(5);
+}
 static void echo_www(int sock, const char* path, ssize_t size)
 {
-	printf("echo_www\n");
+	//printf("echo_www\n");
 	
 	int fd = open(path, O_RDONLY);
 	if( fd < 0){
 		//????
 	}
 	
-	printf("open file success\n");
-	printf("get a new client: %d  %s\n",sock, path);
+	//printf("open file success\n");
+	//printf("get a new client: %d  %s\n",sock, path);
 
-	//char* status_line = "HTTP/1.0 200 OK\r\n\r\n";
+	char* status_line = "HTTP/1.1 200 OK\r\n\r\n";
 	//sprintf(status_line, "HTTP/1.0 200 OK\r\n\r\n");
-	//send(sock, status_line, strlen(status_line), 0);
+	send(sock, status_line, strlen(status_line), 0);
 	//printf("send head success\n");
 
 	int filesize = 0;
@@ -37,9 +72,9 @@ static void echo_www(int sock, const char* path, ssize_t size)
 	}
 	
 	//write(sock, "hello word\n", 10);
-	printf("send file success size is : %d\n", filesize);
+	//printf("send file success size is : %d\n", filesize);
 
-	//close(fd);
+	close(fd);
 }
 		
 static int get_line(int sock, char buf[], int buflen)
@@ -83,9 +118,106 @@ static void clear_header(int sock)
 	int ret = -1;
 	do{
 		ret = get_line(sock, buf, len);
+		printf("head info%s", buf);
 	}while((ret > 0) && (strcmp(buf, "\n") != 0));
+	
 }
 
+
+static void exe_cgi(int sock, const char* method, const char* path,\
+		const char* query_string)
+{
+	char buf[SIZE];
+	int cgi_output[2];
+	int cgi_input[2];
+	int content_length = -1;
+	char method_env[SIZE];
+	char query_string_env[SIZE];
+	char content_length_env[SIZE];
+	int ret = -1;
+	
+
+	printf("querystring:%s\n",query_string);
+
+	if( strcasecmp(method, "GET") == 0)	{
+		clear_header(sock);
+	}else{
+		do{
+			memset(buf, '\0', sizeof(buf));
+			ret = get_line(sock, buf, sizeof(buf));
+			if( strncasecmp(buf, "Content-Length: ", 16) == 0){
+				content_length = atoi(&buf[16]);
+			}
+	printf("head:%s  %d\n", buf,content_length);
+		}while(ret > 0 &&  strcmp(buf, "\n") != 0 );
+		
+		printf("success\n");
+		if(content_length < 0){
+		//	error_deal(__FUNCTION__, __LINE__, "content-length");
+		}
+	}
+	printf("content%d\n",content_length);
+	strcpy(buf, "HTTP/1.1 200 OK\r\n\r\n");
+	send(sock, buf, strlen(buf), 0);
+	printf("bufsend:%s",buf);
+	if(pipe(cgi_input) < 0 || pipe(cgi_output) < 0 )
+		printf("pipe error\n");	
+	
+	pid_t id = fork();
+	if(	id < 0 )
+		printf("fork error\n");
+
+
+	if(id == 0){    //child
+		close(cgi_output[0]);
+		close(cgi_input[1]);
+
+		dup2(cgi_output[1], 1);
+		dup2(cgi_input[0], 0);
+		
+		//??putenv??
+		sprintf(method_env, "REQUEST_METHOD=%s", method);
+		putenv(method_env);
+		
+		if(strcasecmp(method, "GET") == 0){
+			sprintf(query_string_env, "QUERY_STRING=%s", query_string);
+			putenv(query_string_env);
+		}else{
+			sprintf(content_length_env, "CONTENT_LENGTH=%d", content_length);
+			putenv(content_length_env);
+		}
+
+		execl(path, path, NULL);
+		exit(1);
+
+	}else{   //father
+		close(cgi_output[1]);
+		close(cgi_input[0]);
+		
+		char buftmp[SIZE];
+		char c = '\0';
+		int i = 0;
+		if( strcasecmp(method, "POST") == 0 ){
+		//	recv_n(sock, buftmp, content_length );		  
+			for(; i< content_length; i++)
+			{
+				recv(sock,&c,1,0);
+				write(cgi_input[1], &c ,1);
+			}
+		//	write(cgi_input[1], buftmp, content_length);
+			printf("buftmp%s",buftmp);
+		}
+		//printf("%s\n", buftmp);
+	//	char c = '\0';
+		while((ret = read(cgi_output[0], &c, 1)) > 0){
+			send(sock, &c, 1, 0);
+		}
+		close(cgi_input[1]);
+		close(cgi_output[0]);
+		
+		waitpid(id, NULL, 0);
+	}
+}
 
 static void* accept_request(void* arg)
 {
@@ -113,8 +245,8 @@ static void* accept_request(void* arg)
 		//???
 		printf("getline frist line error");
 	}
-	printf("get a new line : %s", buf);
-	printf("line length is %d\n", ret);
+	//printf("get a new line : %s", buf);
+	//printf("line length is %d\n", ret);
 	
 	//get method
 	i = 0;
@@ -152,6 +284,16 @@ static void* accept_request(void* arg)
 	//get cgi
 	if(strcasecmp(method, "POST") == 0){
 		cgi = 1;
+		//query_string = url;
+		//while(*query_string != '\0' && *query_string != '?'){
+		//	query_string++;
+		//}
+		//if(*query_string == '?'){
+		//	cgi = 1;
+		//	*query_string = '\0';
+		//	query_string++;
+		//}	
+
 	}
 	if( strcasecmp(method, "GET") == 0){
 		query_string = url;
@@ -167,12 +309,15 @@ static void* accept_request(void* arg)
 	printf("query string : %s \n", query_string);
 
 	//strcat url
-	sprintf(path, "htdoc%s", url);
+	sprintf(path, "%s", url);
 	if( path[strlen(path)-1] == '/'){
-		strcat(path,"index.html");
+		strcpy(path,"htdoc/index.html");
+	}
+	else{
+		strcpy(path,"cgi/cgi_math");
 	}
 
-	printf("path: %s\n",path);
+	printf("path:%s\n",path);
 	struct stat st;
 	if( stat(path, &st) < 0){
 		printf("stat error\n");
@@ -190,11 +335,13 @@ static void* accept_request(void* arg)
 		
 		if(cgi){
 			printf("cgi!!!\n");
+			exe_cgi(sock, method,path, query_string);
+			
 		}else{
-			//clear_header(sock);
+			clear_header(sock);
 			printf("path: %s\n",path);
 			echo_www(sock, path, st.st_size);
-			printf("fuck\n");
+			//printf("fuck\n");
 		}
 	}
 
