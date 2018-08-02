@@ -1,7 +1,12 @@
-.PHONY:httpd	
-httpd:httpd.c
-	gcc -o httpd httpd.c -lpthread
+target=httpd
+obj=httpd.o
+CC=gcc
+LDFLAGS=-lpthread
+$(target):$(obj)
+	CC $(obj) -o $(target) 
+%.o:%.c 
+	CC -c $< -o $@
 
 .PHONY:clean
 clean:
-	rm -f httpd	
+	-rm -f *.o $(target)	
